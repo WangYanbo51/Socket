@@ -2,7 +2,7 @@ import socket
 import threading
 
 # 配置信息
-HOST = '127.0.0.1'
+HOST = socket.gethostname()
 PORT = 9999
 
 # 存储在线客户端的字典 {socket: username}

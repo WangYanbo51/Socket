@@ -1,26 +1,29 @@
-import socket
+import asyncio
 import sys
-import threading
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
 
 
-def receive_messages(client_socket):
-    """专门负责接收服务器消息的线程函数"""
+# 异步函数：负责接收消息
+async def receive_messages(reader):
     while True:
         try:
-            # 持续监听服务器发来的消息
-            message = client_socket.recv(1024).decode('utf-8')
-            if message:
-                print(f"\r{message}")
-                print("请输入内容: ", end="", flush=True)
+            data = await reader.read(1024)
+            if data:
+                message = data.decode('utf-8')
+                # 关键点：在 patch_stdout 环境下，print 会自动避让输入框
+                print(f"{message}")
             else:
-                # 服务器关闭了连接
+                print("\n[系统] 服务器关闭了连接。")
                 break
-        except:
-            print("[错误] 与服务器断开连接。")
+        except Exception as e:
+            print(f"\n[错误] 接收异常: {e}")
             break
 
 
-def start_client():
+# 异步函数：负责发送消息和处理 UI
+async def main():
     if len(sys.argv) != 3:
         print("用法: python client.py [host] [port]")
         return
@@ -28,39 +31,49 @@ def start_client():
     host = sys.argv[1]
     port = int(sys.argv[2])
 
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
     try:
-        client.connect((host, port))
+        # 建立异步 TCP 连接
+        reader, writer = await asyncio.open_connection(host, port)
 
-        # 1. 连接后立即处理身份验证（发送用户名）
+        # 1. 处理身份验证
         username = input("请输入你的用户名: ").strip()
-        client.send(username.encode('utf-8'))
+        writer.write(username.encode('utf-8'))
+        await writer.drain()
 
-        # 2. 启动子线程：专门负责“收”
-        # daemon=True 表示当主线程退出时，这个子线程也会自动随之关闭
-        receive_thread = threading.Thread(target=receive_messages, args=(client,), daemon=True)
-        receive_thread.start()
+        # 2. 创建 PromptSession 会话对象
+        session = PromptSession()
 
-        # 3. 主线程负责“发”
-        print(f"--- 已进入聊天室，输入 '/quit' 退出 ---")
-        while True:
-            message = input("")
+        # 3. 启动接收协程
+        receive_task = asyncio.create_task(receive_messages(reader))
 
-            if message == "/quit":
-                client.send("/quit".encode('utf-8'))
-                break
+        print(f"--- 已进入聊天室 (输入 '/quit' 退出) ---")
 
-            if message:
-                client.send(message.encode('utf-8'))
-                print("请输入内容: ", end="", flush=True)
+        # 4. 使用 patch_stdout 处理标准输出冲突
+        with patch_stdout():
+            while True:
+                # 此时输入行会一直待在底部，收到的消息会自动排在它上面
+                message = await session.prompt_async("请输入内容 > ")
 
-    except ConnectionRefusedError:
-        print("[错误] 无法连接到服务器。")
-    finally:
-        client.close()
-        print("连接已关闭。")
+                if message.strip() == "/quit":
+                    writer.write("/quit".encode('utf-8'))
+                    await writer.drain()
+                    break
+
+                if message.strip():
+                    writer.write(message.encode('utf-8'))
+                    await writer.drain()
+
+        receive_task.cancel()
+        writer.close()
+        await writer.wait_closed()
+        print("已断开连接。")
+
+    except Exception as e:
+        print(f"无法连接到服务器: {e}")
 
 
 if __name__ == "__main__":
-    start_client()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
