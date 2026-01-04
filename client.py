@@ -52,7 +52,7 @@ async def main():
         with patch_stdout():
             while True:
                 # 此时输入行会一直待在底部，收到的消息会自动排在它上面
-                message = await session.prompt_async("请输入内容 > ")
+                message = await session.prompt_async(f"{username} > ")
 
                 if message.strip() == "/quit":
                     writer.write("/quit".encode('utf-8'))
